@@ -22,7 +22,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, ReactionTypeEmoji
 
 from config import AppConfig, BotConfig, load_config, validate_config
-from llm import LLM
+from llm import LLM, strip_think
 from prompts import (
     build_system_prompt,
     moderator_user_prompt,
@@ -284,7 +284,7 @@ class Orchestrator:
             model=bcfg.model, system=system, user=user, max_tokens=max_tokens
         ):
             acc += piece
-            body = acc.strip()
+            body = strip_think(acc)
             if not body:
                 continue
             now = time.monotonic()
@@ -300,7 +300,7 @@ class Orchestrator:
                 )
                 last_edit = now
 
-        final = acc.strip()[:limit]
+        final = strip_think(acc)[:limit]
         if not final:
             if msg is not None:
                 await self._safe(bot.delete_message(chat_id, msg.message_id))

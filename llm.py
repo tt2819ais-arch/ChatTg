@@ -9,11 +9,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import AsyncIterator, Optional
 
 from openai import AsyncOpenAI
 
 log = logging.getLogger("llm")
+
+# Некоторые reasoning-модели (напр. qwen3) пишут рассуждения прямо в текст в виде
+# <think>...</think>. В чат это попадать не должно — вырезаем (включая незакрытый
+# хвост, чтобы во время «размышления» не показывать пользователю мусор).
+_THINK_CLOSED = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN = re.compile(r"<think>.*$", re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text: str) -> str:
+    if not text:
+        return text
+    text = _THINK_CLOSED.sub("", text)
+    text = _THINK_OPEN.sub("", text)
+    return text.strip()
 
 
 class LLM:
@@ -65,7 +80,7 @@ class LLM:
                 )
                 if not resp.choices:
                     raise RuntimeError("пустой ответ модели (нет choices)")
-                content = (resp.choices[0].message.content or "").strip()
+                content = strip_think((resp.choices[0].message.content or "").strip())
                 if not content:
                     raise RuntimeError("модель вернула пустой текст")
                 return content
