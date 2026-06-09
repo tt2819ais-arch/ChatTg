@@ -1,9 +1,34 @@
-llm:
-  base_url: "https://api.groq.com/openai/v1"
-moderator:
-  model: "llama-3.1-8b-instant"
-bots:
-  - name: "Стратег"   →  model: "openai/gpt-oss-120b"
-  - name: "Креатор"   →  model: "llama-3.3-70b-versatile"
-  - name: "Критик"    →  model: "qwen/qwen3-32b"
-  - name: "Реалист"   →  model: "openai/gpt-oss-20b"
+name: Brainstorm session (po knopke)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Skolko minut derzhat botov onlayn (1-350; limit GitHub ~6h)"
+        required: true
+        default: "120"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Prepare config
+        run: cp config.actions.yaml config.yaml
+      - name: Run brainstorm orchestrator
+        env:
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          BOT_TOKEN_STRATEG: ${{ secrets.BOT_TOKEN_STRATEG }}
+          BOT_TOKEN_KREATOR: ${{ secrets.BOT_TOKEN_KREATOR }}
+          BOT_TOKEN_KRITIK:  ${{ secrets.BOT_TOKEN_KRITIK }}
+          BOT_TOKEN_REALIST: ${{ secrets.BOT_TOKEN_REALIST }}
+        run: |
+          MIN="${{ github.event.inputs.minutes }}"
+          echo "Zapusk botov na ${MIN} minut..."
+          timeout "${MIN}m" python orchestrator.py || true
+          echo "Sessiya zavershena."
