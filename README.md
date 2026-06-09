@@ -177,18 +177,35 @@ python orchestrator.py
 Код переживает эти сбои корректно: при ошибке модели бот **пропускает ход**, а не
 роняет сервис. Поэтому при сплошных 429/404 в чате будет тишина (а не краш).
 
-### 🔁 Альтернатива: Groq (бесплатно, быстро, надёжнее для чат-ботов)
+### ✅ Рекомендация для бесплатного варианта: Groq (быстро и без жёстких лимитов)
 
-Код OpenAI-совместимый, так что Groq подключается без переписывания — поменяй
-в `config.yaml` секцию `openrouter` и `model` у ботов:
+Код OpenAI-совместимый, поэтому Groq подключается **без переписывания** — только 3 правки.
 
-```yaml
-openrouter:
-  api_key: ""                               # ключ Groq в .env: OPENROUTER_API_KEY=gsk_...
-  base_url: "https://api.groq.com/openai/v1"
-# и у ботов, например:
-#   model: "llama-3.3-70b-versatile"
-```
+1. Получи бесплатный ключ: https://console.groq.com/keys
+2. В **`.env`** впиши его (раскомментируй строку):
+   ```env
+   GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   ```
+3. В **`config.yaml`** поставь Groq `base_url` и Groq-id моделей:
+   ```yaml
+   llm:
+     base_url: "https://api.groq.com/openai/v1"
+   moderator:
+     model: "llama-3.1-8b-instant"
+   bots:
+     - name: "Стратег"   →  model: "openai/gpt-oss-120b"
+     - name: "Креатор"   →  model: "llama-3.3-70b-versatile"
+     - name: "Критик"    →  model: "qwen/qwen3-32b"
+     - name: "Реалист"   →  model: "openai/gpt-oss-20b"
+   ```
+
+Актуальные id моделей Groq всегда здесь: https://console.groq.com/docs/models
+(на момент написания доступны: `openai/gpt-oss-120b`, `openai/gpt-oss-20b`,
+`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `qwen/qwen3-32b`).
+
+> Запасной ключ из `GROQ_API_KEY` подхватывается автоматически — отдельная секция
+> в коде не нужна. Если в `.env` заданы и `OPENROUTER_API_KEY`, и `GROQ_API_KEY`,
+> приоритет у OpenRouter (удали лишний, чтобы не путаться).
 
 ---
 

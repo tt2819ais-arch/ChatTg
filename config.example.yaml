@@ -3,18 +3,29 @@
 #  Скопируй этот файл в config.yaml и впиши свои значения.
 #    cp config.example.yaml config.yaml
 #
-#  OPENROUTER_API_KEY можно задать здесь ИЛИ в .env (рекомендуется в .env).
+#  Ключ модели можно задать здесь ИЛИ в .env (рекомендуется в .env).
 #  Значение из переменной окружения (.env) имеет приоритет.
+#
+#  ПРОВАЙДЕР МОДЕЛЕЙ. Код OpenAI-совместимый, поэтому работает и с OpenRouter,
+#  и с Groq — отличаются только base_url, ключ и id моделей. Секцию можно
+#  назвать "llm" (нейтрально) или "openrouter" (старое имя) — читается любая.
 # ─────────────────────────────────────────────────────────────────────────────
 
-openrouter:
-  # Один ключ на ВСЕ "мозги". Получить: https://openrouter.ai/keys
-  # Лучше оставить пустым здесь и положить ключ в .env (OPENROUTER_API_KEY=...)
-  api_key: ""            # напр. "sk-or-v1-xxxxxxxx"  (или возьмётся из .env)
+llm:
+  # ── Вариант A: OpenRouter ──────────────────────────────────────────────────
+  # Ключ: https://openrouter.ai/keys  (в .env: OPENROUTER_API_KEY=...)
+  # Для :free моделей включи тумблер на https://openrouter.ai/settings/privacy
+  #   («Free endpoints that may train…»), иначе будет 404. Free-лимиты жёсткие →
+  #   с 4 ботами легко словить 429.
+  api_key: ""                                   # или возьмётся из .env
   base_url: "https://openrouter.ai/api/v1"
-  # Опционально (OpenRouter любит эти заголовки для бесплатных моделей):
-  http_referer: "https://t.me/your_brainstorm_bot"
+  http_referer: "https://t.me/your_brainstorm_bot"   # OpenRouter любит этот заголовок
   app_title: "Telegram Brainstorm Bots"
+
+  # ── Вариант B: Groq (бесплатно + быстро, рекомендуется) ─────────────────────
+  # Ключ: https://console.groq.com/keys  (в .env: GROQ_API_KEY=...)
+  # Просто поменяй base_url на строку ниже и используй Groq-id моделей (см. ботов):
+  # base_url: "https://api.groq.com/openai/v1"
 
 # Босс — его указания выполняются в первую очередь, любой его ответ выше мнения ботов.
 boss:
@@ -41,20 +52,22 @@ discussion:
   #     используется typing + постепенный edit (визуально тот же эффект «печати»).
 
 # Модель-«модератор»: решает после каждого круга — продолжать / спросить босса / финал.
-# Используй стабильную бесплатную модель. Может совпадать с моделью любого бота.
+# Бери быструю и дешёвую/бесплатную модель.
 moderator:
-  model: "deepseek/deepseek-r1:free"
+  # OpenRouter: "openai/gpt-oss-120b:free"   |   Groq: "llama-3.1-8b-instant"
+  model: "llama-3.1-8b-instant"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Боты. Нужно 4 разных Telegram-бота → 4 токена у @BotFather.
-#  model — любой id с https://openrouter.ai/models?max_price=0  (бесплатные :free)
-#  Список бесплатных моделей у OpenRouter МЕНЯЕТСЯ — если модель пропала,
-#  просто впиши сюда другую :free модель.
+#  model — id из выбранного провайдера. Списки моделей МЕНЯЮТСЯ:
+#    OpenRouter (бесплатные): https://openrouter.ai/models?max_price=0   (суффикс :free)
+#    Groq (актуальные id):    https://console.groq.com/docs/models
+#  Ниже модели Groq (вариант B). Закомментированы рабочие :free аналоги OpenRouter.
 # ─────────────────────────────────────────────────────────────────────────────
 bots:
   - name: "Стратег"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_1"
-    model: "deepseek/deepseek-r1:free"
+    model: "openai/gpt-oss-120b"            # OpenRouter: "openai/gpt-oss-120b:free"
     listener: true            # ровно ОДИН бот слушает сообщения группы (этого достаточно)
     persona: >
       Ты — Стратег. Мыслишь логично и структурно, видишь картину целиком,
@@ -62,21 +75,21 @@ bots:
 
   - name: "Креатор"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_2"
-    model: "meta-llama/llama-3.3-70b-instruct:free"
+    model: "llama-3.3-70b-versatile"        # OpenRouter: "meta-llama/llama-3.3-70b-instruct:free"
     persona: >
       Ты — Креатор. Генерируешь смелые, нестандартные идеи и неожиданные ходы.
       Расширяешь возможности, предлагаешь «а что если». Энергичный, вдохновляющий.
 
   - name: "Критик"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_3"
-    model: "google/gemini-2.0-flash-exp:free"
+    model: "qwen/qwen3-32b"                 # OpenRouter: "z-ai/glm-4.5-air:free"
     persona: >
       Ты — Критик. Быстро находишь слабые места, риски и дыры в идеях.
       Придирчив, но конструктивен: за каждой критикой — как починить.
 
   - name: "Реалист"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_4"
-    model: "qwen/qwen-2.5-72b-instruct:free"
+    model: "openai/gpt-oss-20b"             # OpenRouter: "qwen/qwen3-next-80b-a3b-instruct:free"
     persona: >
       Ты — Реалист. Сводишь всё к выполнимости: ресурсы, сроки, деньги, здравый смысл.
       Отсекаешь фантазии, оставляешь то, что реально сделать.

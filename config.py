@@ -70,9 +70,17 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     with open(cfg_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    orouter = raw.get("openrouter", {}) or {}
-    # Приоритет: переменная окружения > значение в yaml
-    api_key = os.getenv("OPENROUTER_API_KEY") or orouter.get("api_key", "") or ""
+    # Секция провайдера: "llm" (нейтральная) ИЛИ "openrouter" (старое имя) — что есть.
+    orouter = raw.get("llm", None) or raw.get("openrouter", {}) or {}
+    # Приоритет: переменная окружения > значение в yaml.
+    # Поддерживаем оба провайдера: OpenRouter и Groq (оба OpenAI-совместимы).
+    api_key = (
+        os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or os.getenv("LLM_API_KEY")
+        or orouter.get("api_key", "")
+        or ""
+    )
 
     boss = raw.get("boss", {}) or {}
     disc = raw.get("discussion", {}) or {}
@@ -121,8 +129,8 @@ def validate_config(cfg: AppConfig) -> list[str]:
     problems: list[str] = []
     if _looks_like_placeholder(cfg.api_key):
         problems.append(
-            "OPENROUTER_API_KEY не задан или это placeholder. "
-            "Положи ключ в .env (OPENROUTER_API_KEY=...) или в config.yaml."
+            "API-ключ модели не задан (placeholder). Положи ключ в .env: "
+            "OPENROUTER_API_KEY=... (OpenRouter) ИЛИ GROQ_API_KEY=... (Groq)."
         )
     if not cfg.bots:
         problems.append("В config.yaml не описан ни один бот (секция bots).")
