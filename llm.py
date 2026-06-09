@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from openai import AsyncOpenAI
 
@@ -85,6 +85,57 @@ class LLM:
                 await asyncio.sleep(delay * (2 if is_rate else 1))
                 delay *= 2
         return None
+
+    async def stream(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        temperature: float = 0.8,
+        max_tokens: int = 700,
+    ) -> AsyncIterator[str]:
+        """Стримит ответ модели по кусочкам (для анимации «печатает»).
+
+        Ретраи только на этапе установления соединения. Если поток оборвался
+        посреди — отдаём то, что успели. Если так и не удалось — не отдаём ничего
+        (оркестратор воспримет пустой ответ как пропуск хода).
+        """
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        delay = 2.0
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=True,
+                )
+                async for chunk in resp:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    piece = getattr(delta, "content", None)
+                    if piece:
+                        yield piece
+                return
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                is_rate = "429" in msg or "rate" in msg.lower()
+                log.warning(
+                    "LLM stream ошибка (model=%s, попытка %d/%d): %s",
+                    model,
+                    attempt,
+                    self.max_retries,
+                    msg[:200],
+                )
+                if attempt >= self.max_retries:
+                    return
+                await asyncio.sleep(delay * (2 if is_rate else 1))
+                delay *= 2
 
     async def aclose(self) -> None:
         try:

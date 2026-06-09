@@ -35,6 +35,11 @@ class AppConfig:
     max_message_chars: int
     language: str
     moderator_model: str
+    typing: bool = True
+    stream: bool = True
+    edit_interval_seconds: float = 1.2
+    react_on_seen: bool = True
+    seen_emoji: str = "👀"
     bots: list[BotConfig] = field(default_factory=list)
 
     @property
@@ -100,7 +105,12 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         delay_seconds=float(disc.get("delay_seconds", 3)),
         max_message_chars=int(disc.get("max_message_chars", 900)),
         language=str(disc.get("language", "русский")),
-        moderator_model=moderator.get("model", "deepseek/deepseek-r1:free"),
+        moderator_model=moderator.get("model", "openai/gpt-oss-120b:free"),
+        typing=bool(disc.get("typing", True)),
+        stream=bool(disc.get("stream", True)),
+        edit_interval_seconds=float(disc.get("edit_interval_seconds", 1.2)),
+        react_on_seen=bool(disc.get("react_on_seen", True)),
+        seen_emoji=str(disc.get("seen_emoji", "👀")),
         bots=bots,
     )
     return cfg

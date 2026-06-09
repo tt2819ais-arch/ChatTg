@@ -30,10 +30,20 @@ discussion:
   max_message_chars: 900     # ботам велим писать кратко (1 абзац)
   language: "русский"        # язык обсуждения
 
+  # ── Анимация и реакции ──────────────────────────────────────────────────────
+  typing: true               # показывать «печатает…» (sendChatAction) пока бот думает
+  stream: true               # печатать ответ постепенно (editMessageText по мере генерации)
+  edit_interval_seconds: 1.2 # как часто обновлять текст при стриме (НЕ чаще ~1с — лимиты Telegram)
+  react_on_seen: true        # боты ставят реакцию на сообщение Босса, что «увидели» его
+  seen_emoji: "👀"            # эмодзи-реакция (должно быть из списка разрешённых Telegram)
+  # NB: sendMessageDraft (черновик-стриминг) РАБОТАЕТ ТОЛЬКО В ЛИЧНЫХ ЧАТАХ,
+  #     в группах Telegram отдаёт TEXTDRAFT_PEER_INVALID — поэтому в группе
+  #     используется typing + постепенный edit (визуально тот же эффект «печати»).
+
 # Модель-«модератор»: решает после каждого круга — продолжать / спросить босса / финал.
 # Используй стабильную бесплатную модель. Может совпадать с моделью любого бота.
 moderator:
-  model: "openai/gpt-oss-120b:free"
+  model: "deepseek/deepseek-r1:free"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Боты. Нужно 4 разных Telegram-бота → 4 токена у @BotFather.
@@ -44,7 +54,7 @@ moderator:
 bots:
   - name: "Стратег"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_1"
-    model: "openai/gpt-oss-120b:free"
+    model: "deepseek/deepseek-r1:free"
     listener: true            # ровно ОДИН бот слушает сообщения группы (этого достаточно)
     persona: >
       Ты — Стратег. Мыслишь логично и структурно, видишь картину целиком,
@@ -59,14 +69,14 @@ bots:
 
   - name: "Критик"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_3"
-    model: "z-ai/glm-4.5-air:free"
+    model: "google/gemini-2.0-flash-exp:free"
     persona: >
       Ты — Критик. Быстро находишь слабые места, риски и дыры в идеях.
       Придирчив, но конструктивен: за каждой критикой — как починить.
 
   - name: "Реалист"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_4"
-    model: "qwen/qwen3-next-80b-a3b-instruct:free"
+    model: "qwen/qwen-2.5-72b-instruct:free"
     persona: >
       Ты — Реалист. Сводишь всё к выполнимости: ресурсы, сроки, деньги, здравый смысл.
       Отсекаешь фантазии, оставляешь то, что реально сделать.

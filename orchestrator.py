@@ -19,7 +19,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReactionTypeEmoji
 
 from config import AppConfig, BotConfig, load_config, validate_config
 from llm import LLM
@@ -65,8 +65,21 @@ class Orchestrator:
         self.listener_cfg = cfg.listener_bot
         self.listener_bot = self.bots[self.listener_cfg.name]
         self.states: dict[int, ChatState] = {}
+        # Все боты поллят апдейты (чтобы КАЖДЫЙ мог поставить реакцию). Чтобы не
+        # обрабатывать одно сообщение 4 раза — дедуп по (chat_id, message_id).
+        self.seen_msgs: set[tuple[int, int]] = set()
         self.dp = Dispatcher()
         self._register_handlers()
+
+    def _first_time(self, message: Message) -> bool:
+        """True только для первого бота, доставившего это сообщение (дедуп действий)."""
+        key = (message.chat.id, message.message_id)
+        if key in self.seen_msgs:
+            return False
+        self.seen_msgs.add(key)
+        if len(self.seen_msgs) > 5000:  # не растём бесконечно
+            self.seen_msgs = set(list(self.seen_msgs)[-2000:])
+        return True
 
     # ── состояние чата ────────────────────────────────────────────────────────
     def state(self, chat_id: int) -> ChatState:
@@ -80,6 +93,8 @@ class Orchestrator:
 
         @dp.message(Command("start", "help"))
         async def cmd_help(message: Message):
+            if not self._first_time(message):
+                return
             await self._reply_listener(
                 message.chat.id,
                 "👋 Привет! Я — команда ИИ-ботов для брейншторма: "
@@ -92,6 +107,8 @@ class Orchestrator:
 
         @dp.message(Command("stop"))
         async def cmd_stop(message: Message):
+            if not self._first_time(message):
+                return
             st = self.state(message.chat.id)
             self._cancel_task(st)
             st.status = "idle"
@@ -99,6 +116,8 @@ class Orchestrator:
 
         @dp.message(Command("reset"))
         async def cmd_reset(message: Message):
+            if not self._first_time(message):
+                return
             st = self.state(message.chat.id)
             self._cancel_task(st)
             st.transcript.clear()
@@ -110,6 +129,8 @@ class Orchestrator:
 
         @dp.message(Command("status"))
         async def cmd_status(message: Message):
+            if not self._first_time(message):
+                return
             st = self.state(message.chat.id)
             await self._reply_listener(
                 message.chat.id,
@@ -118,9 +139,22 @@ class Orchestrator:
             )
 
         @dp.message(F.text & ~F.via_bot)
-        async def on_text(message: Message):
+        async def on_text(message: Message, bot: Bot):
             # Игнорируем сообщения от ботов (на всякий случай).
             if message.from_user and message.from_user.is_bot:
+                return
+            # Реакция «увидел» — ставит ИМЕННО тот бот, что получил апдейт
+            # (только он гарантированно «видит» сообщение в своём API-сеансе).
+            if self.cfg.react_on_seen:
+                await self._safe(
+                    bot.set_message_reaction(
+                        message.chat.id,
+                        message.message_id,
+                        reaction=[ReactionTypeEmoji(emoji=self.cfg.seen_emoji)],
+                    )
+                )
+            # Логику обсуждения запускаем один раз (дедуп по message_id).
+            if not self._first_time(message):
                 return
             await self._on_human_message(message)
 
@@ -141,6 +175,8 @@ class Orchestrator:
         )
         st.transcript.append({"name": author, "text": text, "is_boss": is_boss})
         log.info("Вход от %s (boss=%s): %s", author, is_boss, text[:80])
+
+        # (реакция «увидел» уже поставлена в on_text тем ботом, что получил апдейт)
 
         # Если идёт обсуждение — реплика просто учтётся в транскрипте следующим ходом.
         if st.status == "discussing":
@@ -203,18 +239,97 @@ class Orchestrator:
         st = self.state(chat_id)
         system = build_system_prompt(self.cfg, bcfg)
         user = turn_user_prompt(st.transcript, self.cfg, bcfg)
-        reply = await self.llm.chat(
-            model=bcfg.model,
-            system=system,
-            user=user,
-            max_tokens=min(900, self.cfg.max_message_chars + 300),
+        bot = self.bots.get(bcfg.name, self.listener_bot)
+        max_tokens = min(900, self.cfg.max_message_chars + 300)
+
+        # «печатает…» — индикатор живёт ~5с, поэтому держим его в фоне.
+        typing_task = (
+            asyncio.create_task(self._keep_typing(bot, chat_id))
+            if self.cfg.typing
+            else None
         )
+        try:
+            if self.cfg.stream:
+                reply = await self._stream_turn(
+                    bot, bcfg, chat_id, system, user, max_tokens
+                )
+            else:
+                reply = await self.llm.chat(
+                    model=bcfg.model, system=system, user=user, max_tokens=max_tokens
+                )
+                if reply:
+                    reply = reply.strip()[: self.cfg.max_message_chars + 200]
+                    await self._send_plain(bot, chat_id, f"{bcfg.name}: {reply}")
+        finally:
+            if typing_task:
+                typing_task.cancel()
+
         if not reply:
             log.warning("Бот %s пропустил ход (нет ответа модели)", bcfg.name)
             return
-        reply = reply.strip()[: self.cfg.max_message_chars + 200]
         st.transcript.append({"name": bcfg.name, "text": reply, "is_boss": False})
-        await self._send_as(bcfg.name, chat_id, reply)
+
+    async def _stream_turn(
+        self, bot, bcfg: BotConfig, chat_id: int, system: str, user: str, max_tokens: int
+    ) -> str:
+        """Постепенно «печатает» ответ бота через editMessageText. Возвращает текст."""
+        import time
+
+        prefix = f"{bcfg.name}: "
+        limit = self.cfg.max_message_chars + 200
+        acc = ""
+        msg = None
+        last_edit = 0.0
+        async for piece in self.llm.stream(
+            model=bcfg.model, system=system, user=user, max_tokens=max_tokens
+        ):
+            acc += piece
+            body = acc.strip()
+            if not body:
+                continue
+            now = time.monotonic()
+            display = (prefix + body)[:limit] + " ▍"  # ▍ — «курсор», эффект печати
+            if msg is None:
+                msg = await self._safe(bot.send_message(chat_id, display, parse_mode=None))
+                last_edit = now
+            elif now - last_edit >= self.cfg.edit_interval_seconds:
+                await self._safe(
+                    bot.edit_message_text(
+                        display, chat_id=chat_id, message_id=msg.message_id
+                    )
+                )
+                last_edit = now
+
+        final = acc.strip()[:limit]
+        if not final:
+            if msg is not None:
+                await self._safe(bot.delete_message(chat_id, msg.message_id))
+            return ""
+        full = prefix + final
+        if msg is None:
+            await self._safe(bot.send_message(chat_id, full, parse_mode=None))
+        else:
+            await self._safe(
+                bot.edit_message_text(full, chat_id=chat_id, message_id=msg.message_id)
+            )
+        return final
+
+    async def _keep_typing(self, bot, chat_id: int) -> None:
+        try:
+            while True:
+                await self._safe(bot.send_chat_action(chat_id, "typing"))
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            return
+
+    @staticmethod
+    async def _safe(coro):
+        """Выполнить корутину Telegram, проглотив ошибки (edit too fast / not modified)."""
+        try:
+            return await coro
+        except Exception as e:  # noqa: BLE001
+            log.debug("tg call skipped: %s", str(e)[:120])
+            return None
 
     async def _moderate(self, chat_id: int, round_no: int) -> dict:
         st = self.state(chat_id)
@@ -228,12 +343,8 @@ class Orchestrator:
         return parse_moderator(raw or "")
 
     # ── отправка ────────────────────────────────────────────────────────────────
-    async def _send_as(self, bot_name: str, chat_id: int, text: str) -> None:
-        bot = self.bots.get(bot_name, self.listener_bot)
-        try:
-            await bot.send_message(chat_id, f"<b>{bot_name}:</b> {text}")
-        except Exception as e:  # noqa: BLE001
-            log.warning("Не смог отправить от %s: %s", bot_name, e)
+    async def _send_plain(self, bot, chat_id: int, text: str) -> None:
+        await self._safe(bot.send_message(chat_id, text, parse_mode=None))
 
     async def _reply_listener(self, chat_id: int, text: str) -> None:
         try:
@@ -248,15 +359,21 @@ class Orchestrator:
 
     # ── запуск ────────────────────────────────────────────────────────────────
     async def run(self) -> None:
-        me = await self.listener_bot.get_me()
-        log.info("Слушающий бот: @%s (%s)", me.username, self.listener_cfg.name)
+        for name, bot in self.bots.items():
+            try:
+                me = await bot.get_me()
+                log.info("Бот «%s» = @%s", name, me.username)
+            except Exception as e:  # noqa: BLE001
+                log.error("Бот «%s»: не удалось подключиться: %s", name, e)
         log.info(
-            "Боты в команде: %s",
-            ", ".join(f"{n}" for n in self.bots.keys()),
+            "Все боты поллят апдейты (нужен Privacy Disable или статус админа, "
+            "чтобы каждый видел сообщения группы и мог поставить реакцию)."
         )
         try:
-            # Поллим ТОЛЬКО слушающего бота — остальные только отправляют.
-            await self.dp.start_polling(self.listener_bot, handle_signals=True)
+            # Поллим ВСЕ боты сразу: каждый получает сообщение Босса (если у него
+            # отключён Privacy Mode/он админ) и может поставить реакцию. Логика
+            # обсуждения запускается один раз — дедуп по message_id.
+            await self.dp.start_polling(*self.bots.values(), handle_signals=True)
         finally:
             await self.llm.aclose()
             for b in self.bots.values():
