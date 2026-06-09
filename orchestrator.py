@@ -29,6 +29,15 @@ from prompts import (
     parse_moderator,
     turn_user_prompt,
     MODERATOR_SYSTEM,
+    leader_command_prompt,
+    VOTE_OPTIONS_SYSTEM,
+    vote_options_user_prompt,
+    parse_vote_options,
+    vote_prompt,
+    parse_vote,
+    vote_reason,
+    FINAL_DELIVERABLE_SYSTEM,
+    final_deliverable_prompt,
 )
 
 logging.basicConfig(
@@ -99,10 +108,14 @@ class Orchestrator:
                 message.chat.id,
                 "👋 Привет! Я — команда ИИ-ботов для брейншторма: "
                 + ", ".join(self.bots.keys())
-                + ".\n\nНапиши свою идею в этот чат — и мы начнём её обсуждать по "
-                "кругам, будем задавать тебе уточняющие вопросы и слушаться тебя.\n\n"
-                "Команды: /stop — остановить обсуждение, /reset — забыть диалог, "
-                "/status — что сейчас происходит.",
+                + ".\n\n1) Напиши свою идею — мы её пообсуждаем простым языком и "
+                "позадаём тебе вопросы.\n"
+                f"2) Когда скажешь «погнали» / «делаем» — старший ({self.cfg.leader_bot.name}) "
+                "раздаст всем задачи, команда обсудит и проголосует (где больше "
+                "голосов — то и делаем).\n"
+                "3) На выходе соберём подробный ПРОМПТ и ТЗ по твоей идее (код не "
+                "пишем). Твоё слово — закон.\n\n"
+                "Команды: /stop — стоп, /reset — забыть диалог, /status — что сейчас.",
             )
 
         @dp.message(Command("stop"))
@@ -178,6 +191,15 @@ class Orchestrator:
 
         # (реакция «увидел» уже поставлена в on_text тем ботом, что получил апдейт)
 
+        # Команда Босса «погнали/делаем» → лидер берёт командование: раздаёт
+        # задачи, команда обсуждает, спорное решает голосованием, затем выдаёт
+        # подробный промпт + ТЗ. Перебивает обычный брейншторм, если он шёл.
+        if is_boss and self.cfg.voting and self._is_go_command(text):
+            self._cancel_task(st)
+            st.round_no = 0
+            st.task = asyncio.create_task(self._run_directed_session(chat_id))
+            return
+
         # Если идёт обсуждение — реплика просто учтётся в транскрипте следующим ходом.
         if st.status == "discussing":
             return
@@ -235,12 +257,197 @@ class Orchestrator:
                 log.exception("Чат %s: ошибка в цикле: %s", chat_id, e)
                 st.status = "idle"
 
-    async def _one_bot_turn(self, chat_id: int, bcfg: BotConfig) -> None:
+    # ── лидер-режим: команда → обсуждение → голосование → промпт+ТЗ ────────────
+    def _is_go_command(self, text: str) -> bool:
+        import re
+
+        t = text.lower()
+        tokens = set(re.findall(r"\w+", t, re.UNICODE))
+        for w in self.cfg.go_words:
+            if " " in w:
+                if w in t:
+                    return True
+            elif w in tokens:
+                return True
+        return False
+
+    async def _run_directed_session(self, chat_id: int) -> None:
+        st = self.state(chat_id)
+        async with st.lock:
+            st.status = "discussing"
+            leader = self.cfg.leader_bot
+            try:
+                # 1. Лидер раздаёт задачи команде.
+                await self._one_bot_turn(
+                    chat_id,
+                    leader,
+                    user_prompt=leader_command_prompt(st.transcript, self.cfg),
+                )
+                await asyncio.sleep(self.cfg.delay_seconds)
+
+                # 2. Команда обсуждает (остальные боты по кругам).
+                others = [b for b in self.cfg.bots if b.name != leader.name]
+                for _ in range(max(1, self.cfg.directed_rounds)):
+                    for bcfg in others:
+                        await self._one_bot_turn(chat_id, bcfg)
+                        await asyncio.sleep(self.cfg.delay_seconds)
+
+                # 3. Голосование по главной развилке.
+                await self._run_vote(chat_id)
+                await asyncio.sleep(self.cfg.delay_seconds)
+
+                # 4. Финал: лидер собирает подробный промпт + ТЗ.
+                await self._final_deliverable(chat_id)
+                st.status = "idle"
+            except asyncio.CancelledError:
+                log.info("Чат %s: направленная сессия отменена", chat_id)
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.exception("Чат %s: ошибка в направленной сессии: %s", chat_id, e)
+                st.status = "idle"
+
+    async def _run_vote(self, chat_id: int) -> None:
+        st = self.state(chat_id)
+        leader = self.cfg.leader_bot
+        # 1. Сформулировать вопрос и варианты.
+        raw = await self.llm.chat(
+            model=self.cfg.moderator_model,
+            system=VOTE_OPTIONS_SYSTEM,
+            user=vote_options_user_prompt(st.transcript, self.cfg),
+            temperature=0.2,
+            max_tokens=400,
+        )
+        vo = parse_vote_options(strip_think(raw or ""))
+        options = vo["options"]
+        question = vo["question"] or "Какой вариант берём?"
+        if len(options) < 2:
+            log.info("Чат %s: явной развилки нет — голосование пропущено", chat_id)
+            return
+
+        numbered = "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
+        await self._say_as(
+            leader, chat_id, f"🗳 Голосуем: {question}\n{numbered}"
+        )
+        await asyncio.sleep(self.cfg.delay_seconds)
+
+        # 2. Каждый бот голосует.
+        tally = [0] * len(options)
+        for bcfg in self.cfg.bots:
+            raw = await self.llm.chat(
+                model=bcfg.model,
+                system=build_system_prompt(self.cfg, bcfg),
+                user=vote_prompt(st.transcript, self.cfg, bcfg, question, options),
+                temperature=0.4,
+                max_tokens=160,
+            )
+            clean = strip_think(raw or "")
+            idx = parse_vote(clean, len(options))
+            if idx < 0:
+                log.warning("Бот %s: голос не распознан — пропуск", bcfg.name)
+                continue
+            reason = vote_reason(clean)
+            tally[idx] += 1
+            txt = f"голосую за «{options[idx]}»" + (f" — {reason}" if reason else "")
+            await self._say_as(bcfg, chat_id, txt)
+            await asyncio.sleep(self.cfg.delay_seconds)
+
+        # 3. Подвести итог (большинство; ничью решает лидер).
+        top = max(tally) if tally else 0
+        winners = [i for i, v in enumerate(tally) if v == top and top > 0]
+        score = ", ".join(f"{options[i]}: {tally[i]}" for i in range(len(options)))
+        if not winners:
+            await self._say_as(leader, chat_id, f"Голоса не сложились ({score}). Решаю сам — двигаемся дальше.")
+            return
+        if len(winners) == 1:
+            decision = options[winners[0]]
+            await self._say_as(
+                leader, chat_id,
+                f"✅ Большинством голосов берём: «{decision}» ({score}).",
+            )
+            return
+        # Ничья → лидер выбирает из спорных вариантов.
+        tied = [options[i] for i in winners]
+        raw = await self.llm.chat(
+            model=leader.model,
+            system=build_system_prompt(self.cfg, leader),
+            user=vote_prompt(
+                st.transcript, self.cfg, leader,
+                "Ничья в голосовании — реши как старший, что берём", tied,
+            ),
+            temperature=0.3,
+            max_tokens=160,
+        )
+        clean = strip_think(raw or "")
+        idx = parse_vote(clean, len(tied))
+        decision = tied[idx if idx >= 0 else 0]
+        reason = vote_reason(clean)
+        await self._say_as(
+            leader, chat_id,
+            f"⚖️ Голоса разделились ({score}). Как старший решаю: «{decision}»."
+            + (f" {reason}" if reason else ""),
+        )
+
+    async def _final_deliverable(self, chat_id: int) -> None:
+        st = self.state(chat_id)
+        leader = self.cfg.leader_bot
+        bot = self.bots.get(leader.name, self.listener_bot)
+        typing_task = (
+            asyncio.create_task(self._keep_typing(bot, chat_id))
+            if self.cfg.typing
+            else None
+        )
+        try:
+            raw = await self.llm.chat(
+                model=leader.model,
+                system=FINAL_DELIVERABLE_SYSTEM,
+                user=final_deliverable_prompt(st.transcript, self.cfg),
+                temperature=0.5,
+                max_tokens=1600,
+            )
+        finally:
+            if typing_task:
+                typing_task.cancel()
+        text = strip_think(raw or "").strip()
+        if not text:
+            await self._reply_listener(
+                chat_id, "Не получилось собрать финал — Босс, дай ещё вводных?"
+            )
+            return
+        await self._send_long(bot, chat_id, f"📦 ИТОГ — промпт + ТЗ\n\n{text}")
+        st.transcript.append(
+            {"name": leader.name, "text": text, "is_boss": False}
+        )
+
+    async def _say_as(self, bcfg: BotConfig, chat_id: int, text: str) -> None:
+        """Отправить реплику от имени конкретного бота и записать в транскрипт."""
+        bot = self.bots.get(bcfg.name, self.listener_bot)
+        await self._send_plain(bot, chat_id, f"{bcfg.name}: {text}")
+        self.state(chat_id).transcript.append(
+            {"name": bcfg.name, "text": text, "is_boss": False}
+        )
+
+    async def _send_long(self, bot, chat_id: int, text: str) -> None:
+        """Telegram лимит ~4096 символов — режем длинный финал на части."""
+        chunk = 3800
+        for i in range(0, len(text), chunk):
+            await self._send_plain(bot, chat_id, text[i : i + chunk])
+            await asyncio.sleep(0.5)
+
+    async def _one_bot_turn(
+        self,
+        chat_id: int,
+        bcfg: BotConfig,
+        *,
+        user_prompt: str | None = None,
+        max_chars: int | None = None,
+    ) -> str:
+        """Ход одного бота. Возвращает текст реплики (или '' если пропустил)."""
         st = self.state(chat_id)
         system = build_system_prompt(self.cfg, bcfg)
-        user = turn_user_prompt(st.transcript, self.cfg, bcfg)
+        user = user_prompt or turn_user_prompt(st.transcript, self.cfg, bcfg)
         bot = self.bots.get(bcfg.name, self.listener_bot)
-        max_tokens = min(900, self.cfg.max_message_chars + 300)
+        limit_chars = max_chars or self.cfg.max_message_chars
+        max_tokens = min(1100, limit_chars + 400)
 
         # «печатает…» — индикатор живёт ~5с, поэтому держим его в фоне.
         typing_task = (
@@ -251,14 +458,14 @@ class Orchestrator:
         try:
             if self.cfg.stream:
                 reply = await self._stream_turn(
-                    bot, bcfg, chat_id, system, user, max_tokens
+                    bot, bcfg, chat_id, system, user, max_tokens, limit_chars
                 )
             else:
                 reply = await self.llm.chat(
                     model=bcfg.model, system=system, user=user, max_tokens=max_tokens
                 )
                 if reply:
-                    reply = reply.strip()[: self.cfg.max_message_chars + 200]
+                    reply = strip_think(reply).strip()[: limit_chars + 200]
                     await self._send_plain(bot, chat_id, f"{bcfg.name}: {reply}")
         finally:
             if typing_task:
@@ -266,17 +473,25 @@ class Orchestrator:
 
         if not reply:
             log.warning("Бот %s пропустил ход (нет ответа модели)", bcfg.name)
-            return
+            return ""
         st.transcript.append({"name": bcfg.name, "text": reply, "is_boss": False})
+        return reply
 
     async def _stream_turn(
-        self, bot, bcfg: BotConfig, chat_id: int, system: str, user: str, max_tokens: int
+        self,
+        bot,
+        bcfg: BotConfig,
+        chat_id: int,
+        system: str,
+        user: str,
+        max_tokens: int,
+        limit_chars: int,
     ) -> str:
         """Постепенно «печатает» ответ бота через editMessageText. Возвращает текст."""
         import time
 
         prefix = f"{bcfg.name}: "
-        limit = self.cfg.max_message_chars + 200
+        limit = limit_chars + 200
         acc = ""
         msg = None
         last_edit = 0.0

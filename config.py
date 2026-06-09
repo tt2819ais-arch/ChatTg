@@ -12,6 +12,13 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 PLACEHOLDER_MARKERS = ("PASTE_", "xxxxxxxx", "PASTE_TELEGRAM_BOT_TOKEN")
 
+# Слова-команды Босса «погнали, делаем» → лидер раздаёт задачи и команда работает.
+DEFAULT_GO_WORDS = [
+    "делаем", "делайте", "поехали", "погнали", "вперёд", "вперед", "го",
+    "приступаем", "приступайте", "стартуем", "начинаем", "за дело",
+    "действуйте", "решаем", "запускаем", "погнали ребят",
+]
+
 
 @dataclass
 class BotConfig:
@@ -40,6 +47,11 @@ class AppConfig:
     edit_interval_seconds: float = 1.2
     react_on_seen: bool = True
     seen_emoji: str = "👀"
+    # Лидер-режим и голосование
+    leader_name: str = ""
+    go_words: list[str] = field(default_factory=list)
+    directed_rounds: int = 2
+    voting: bool = True
     bots: list[BotConfig] = field(default_factory=list)
 
     @property
@@ -48,6 +60,15 @@ class AppConfig:
             if b.listener:
                 return b
         # если флаг listener не выставлен — слушает первый бот
+        return self.bots[0]
+
+    @property
+    def leader_bot(self) -> BotConfig:
+        """Бот-командир. По умолчанию — по имени leader_name, иначе первый бот."""
+        if self.leader_name:
+            for b in self.bots:
+                if b.name == self.leader_name:
+                    return b
         return self.bots[0]
 
 
@@ -122,6 +143,10 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         edit_interval_seconds=float(disc.get("edit_interval_seconds", 1.2)),
         react_on_seen=bool(disc.get("react_on_seen", True)),
         seen_emoji=str(disc.get("seen_emoji", "👀")),
+        leader_name=str(disc.get("leader_name", "") or ""),
+        go_words=[str(w).lower().strip() for w in (disc.get("go_words") or DEFAULT_GO_WORDS)],
+        directed_rounds=int(disc.get("directed_rounds", 2)),
+        voting=bool(disc.get("voting", True)),
         bots=bots,
     )
     return cfg
