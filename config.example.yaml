@@ -33,7 +33,7 @@ discussion:
 # Модель-«модератор»: решает после каждого круга — продолжать / спросить босса / финал.
 # Используй стабильную бесплатную модель. Может совпадать с моделью любого бота.
 moderator:
-  model: "deepseek/deepseek-r1:free"
+  model: "openai/gpt-oss-120b:free"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Боты. Нужно 4 разных Telegram-бота → 4 токена у @BotFather.
@@ -44,7 +44,7 @@ moderator:
 bots:
   - name: "Стратег"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_1"
-    model: "deepseek/deepseek-r1:free"
+    model: "openai/gpt-oss-120b:free"
     listener: true            # ровно ОДИН бот слушает сообщения группы (этого достаточно)
     persona: >
       Ты — Стратег. Мыслишь логично и структурно, видишь картину целиком,
@@ -59,14 +59,14 @@ bots:
 
   - name: "Критик"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_3"
-    model: "google/gemini-2.0-flash-exp:free"
+    model: "z-ai/glm-4.5-air:free"
     persona: >
       Ты — Критик. Быстро находишь слабые места, риски и дыры в идеях.
       Придирчив, но конструктивен: за каждой критикой — как починить.
 
   - name: "Реалист"
     telegram_token: "PASTE_TELEGRAM_BOT_TOKEN_4"
-    model: "qwen/qwen-2.5-72b-instruct:free"
+    model: "qwen/qwen3-next-80b-a3b-instruct:free"
     persona: >
       Ты — Реалист. Сводишь всё к выполнимости: ресурсы, сроки, деньги, здравый смысл.
       Отсекаешь фантазии, оставляешь то, что реально сделать.
