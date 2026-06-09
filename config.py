@@ -89,9 +89,12 @@ def load_config(path: Optional[str] = None) -> AppConfig:
     bots_raw = raw.get("bots", []) or []
     bots: list[BotConfig] = []
     for b in bots_raw:
-        token = os.getenv(f"TELEGRAM_TOKEN_{b.get('name','').upper()}") or b.get(
-            "telegram_token", ""
-        )
+        # Токен можно взять из переменной окружения (приоритет — для секретов в
+        # CI/хостинге, где .env нет). Имя переменной задаётся явно через token_env
+        # (нужно для имён ботов кириллицей — имена env-переменных только латиницей),
+        # либо по умолчанию TELEGRAM_TOKEN_<ИМЯ В ВЕРХНЕМ РЕГИСТРЕ>.
+        env_name = b.get("token_env") or f"TELEGRAM_TOKEN_{b.get('name','').upper()}"
+        token = os.getenv(env_name) or b.get("telegram_token", "")
         bots.append(
             BotConfig(
                 name=b.get("name", "Bot"),

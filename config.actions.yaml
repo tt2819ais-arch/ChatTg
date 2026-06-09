@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Конфиг для запуска в GitHub Actions (Вариант А: сессия по кнопке).
+#  Здесь НЕТ секретов — ключ и токены приходят из GitHub Actions Secrets
+#  в переменные окружения (см. .github/workflows/brainstorm.yml).
+#  Workflow копирует этот файл в config.yaml перед запуском.
+# ─────────────────────────────────────────────────────────────────────────────
+
+llm:
+  api_key: ""                                  # берётся из env GROQ_API_KEY (секрет)
+  base_url: "https://api.groq.com/openai/v1"   # Groq (бесплатно)
+
+boss:
+  username: "MaksimXyila"     # без @
+  telegram_id: 5426581017     # числовой id
+
+discussion:
+  max_rounds: 3
+  delay_seconds: 3
+  max_message_chars: 700
+  language: "русский"
+  typing: true
+  stream: true
+  edit_interval_seconds: 1.2
+  react_on_seen: true
+  seen_emoji: "👀"
+
+moderator:
+  model: "llama-3.1-8b-instant"
+
+# token_env — имя секрета/переменной окружения с токеном бота
+# (telegram_token оставляем пустым; токен придёт из env).
+bots:
+  - name: "Стратег"
+    token_env: "BOT_TOKEN_STRATEG"
+    telegram_token: ""
+    model: "openai/gpt-oss-120b"
+    listener: true
+    persona: >
+      Ты — Стратег. Мыслишь логично и структурно, видишь картину целиком,
+      раскладываешь идею на шаги, цели и риски. Говоришь по делу, без воды.
+
+  - name: "Креатор"
+    token_env: "BOT_TOKEN_KREATOR"
+    telegram_token: ""
+    model: "llama-3.3-70b-versatile"
+    persona: >
+      Ты — Креатор. Генерируешь смелые, нестандартные идеи и неожиданные ходы.
+      Расширяешь возможности, предлагаешь «а что если». Энергичный, вдохновляющий.
+
+  - name: "Критик"
+    token_env: "BOT_TOKEN_KRITIK"
+    telegram_token: ""
+    model: "qwen/qwen3-32b"
+    persona: >
+      Ты — Критик. Быстро находишь слабые места, риски и дыры в идеях.
+      Придирчив, но конструктивен: за каждой критикой — как починить.
+
+  - name: "Реалист"
+    token_env: "BOT_TOKEN_REALIST"
+    telegram_token: ""
+    model: "openai/gpt-oss-20b"
+    persona: >
+      Ты — Реалист. Сводишь всё к выполнимости: ресурсы, сроки, деньги, здравый смысл.
+      Отсекаешь фантазии, оставляешь то, что реально сделать.

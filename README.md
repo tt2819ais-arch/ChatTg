@@ -209,6 +209,92 @@ python orchestrator.py
 
 ---
 
+## ☁️ Хостинг без своего ПК
+
+### Вариант А — GitHub Actions: сессия «по кнопке»
+
+Workflow поднимает ботов на заданное число минут и сам выключает их.
+
+> ⚠️ Файл workflow нужно создать вручную (GitHub не даёт ботам/приложениям
+> добавлять файлы в `.github/workflows/` за тебя). Это 1 минута:
+> на GitHub нажми **Add file → Create new file**, путь
+> `.github/workflows/brainstorm.yml`, вставь YAML ниже и закоммить.
+
+<details>
+<summary>📄 Содержимое <code>.github/workflows/brainstorm.yml</code> (скопировать)</summary>
+
+```yaml
+name: Brainstorm session (по кнопке)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Сколько минут держать ботов онлайн (1–350; лимит GitHub ~6ч)"
+        required: true
+        default: "120"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Prepare config (Groq, без секретов в файле)
+        run: cp config.actions.yaml config.yaml
+      - name: Run brainstorm orchestrator
+        env:
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          BOT_TOKEN_STRATEG: ${{ secrets.BOT_TOKEN_STRATEG }}
+          BOT_TOKEN_KREATOR: ${{ secrets.BOT_TOKEN_KREATOR }}
+          BOT_TOKEN_KRITIK:  ${{ secrets.BOT_TOKEN_KRITIK }}
+          BOT_TOKEN_REALIST: ${{ secrets.BOT_TOKEN_REALIST }}
+        run: |
+          MIN="${{ github.event.inputs.minutes }}"
+          echo "Запуск ботов на ${MIN} минут…"
+          timeout "${MIN}m" python orchestrator.py || true
+          echo "Сессия завершена."
+```
+</details>
+
+> ⚠️ *Actions — НЕ постоянный 24/7-сервер.* Один запуск ограничен ~6 часами,
+> а запуск по расписанию (cron) ненадёжен (задержки/пропуски). Поэтому Actions
+> годится для **«побрейнштормили и закрыли»**, но не для «бот всегда онлайн».
+
+> ⚠️ *Главное:* Actions работает **на серверах GitHub, а не на твоём ПК** — твоего
+> локального `.env` там НЕТ. Токены и ключ нужно положить в **GitHub Actions Secrets**
+> (это бесплатно и не светится в коде). Коммитить реальный `.env` в публичный репо
+> НЕЛЬЗЯ — токены утекут в историю git.
+
+*Шаги:*
+1. В репозитории: **Settings → Secrets and variables → Actions → New repository secret**.
+   Создай 5 секретов (значения — твои реальные токены/ключ):
+
+   | Имя секрета | Значение |
+   |---|---|
+   | `GROQ_API_KEY` | ключ Groq (`gsk_...`) |
+   | `BOT_TOKEN_STRATEG` | токен бота Стратег |
+   | `BOT_TOKEN_KREATOR` | токен бота Креатор |
+   | `BOT_TOKEN_KRITIK` | токен бота Критик |
+   | `BOT_TOKEN_REALIST` | токен бота Реалист |
+
+2. Вкладка **Actions** → workflow **«Brainstorm session (по кнопке)»** → **Run workflow**
+   → укажи минуты (напр. 120) → запустить.
+3. Пока job идёт — пиши идею в группу, боты отвечают. По истечении минут (или ~6ч)
+   сессия сама закрывается. Конфиг для Actions — `config.actions.yaml` (Groq, без секретов).
+
+### Вариант Б — бесплатный хост «всегда онлайн» (если нужно 24/7)
+
+- **Oracle Cloud Always Free** (ARM VM) — реально бесплатный 24/7.
+- **fly.io / Railway** — бесплатные лимиты; **Render** — бесплатно, но засыпает в простое.
+- Запускаешь там `python orchestrator.py` под `systemd`/`screen`, токены — в env хоста.
+
+---
+
 ## 🗂 Структура проекта
 
 ```
