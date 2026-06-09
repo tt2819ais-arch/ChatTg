@@ -19,6 +19,13 @@ DEFAULT_GO_WORDS = [
     "действуйте", "решаем", "запускаем", "погнали ребят",
 ]
 
+# Слова-маркеры новой темы → команда забывает старое обсуждение и переключается.
+DEFAULT_NEW_TOPIC_WORDS = [
+    "новая тема", "другая идея", "другая тема", "сменим тему", "смени тему",
+    "забудь", "забудьте", "забываем", "новая идея", "поменяем тему",
+    "сменили тему", "теперь про другое", "давай про другое",
+]
+
 
 @dataclass
 class BotConfig:
@@ -52,6 +59,9 @@ class AppConfig:
     go_words: list[str] = field(default_factory=list)
     directed_rounds: int = 2
     voting: bool = True
+    # Переключение темы
+    new_topic_words: list[str] = field(default_factory=list)
+    topic_switch_detect: bool = True
     bots: list[BotConfig] = field(default_factory=list)
 
     @property
@@ -147,6 +157,11 @@ def load_config(path: Optional[str] = None) -> AppConfig:
         go_words=[str(w).lower().strip() for w in (disc.get("go_words") or DEFAULT_GO_WORDS)],
         directed_rounds=int(disc.get("directed_rounds", 2)),
         voting=bool(disc.get("voting", True)),
+        new_topic_words=[
+            str(w).lower().strip()
+            for w in (disc.get("new_topic_words") or DEFAULT_NEW_TOPIC_WORDS)
+        ],
+        topic_switch_detect=bool(disc.get("topic_switch_detect", True)),
         bots=bots,
     )
     return cfg

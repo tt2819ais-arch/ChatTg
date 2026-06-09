@@ -38,6 +38,9 @@ from prompts import (
     vote_reason,
     FINAL_DELIVERABLE_SYSTEM,
     final_deliverable_prompt,
+    TOPIC_SHIFT_SYSTEM,
+    topic_shift_user_prompt,
+    parse_topic_shift,
 )
 
 logging.basicConfig(
@@ -115,7 +118,10 @@ class Orchestrator:
                 "голосов — то и делаем).\n"
                 "3) На выходе соберём подробный ПРОМПТ и ТЗ по твоей идее (код не "
                 "пишем). Твоё слово — закон.\n\n"
-                "Команды: /stop — стоп, /reset — забыть диалог, /status — что сейчас.",
+                "Сменить тему можно просто новым сообщением (или командой /new) — "
+                "старое сразу забудем.\n"
+                "Команды: /new — новая тема, /stop — стоп, /reset — забыть всё, "
+                "/status — что сейчас.",
             )
 
         @dp.message(Command("stop"))
@@ -138,6 +144,20 @@ class Orchestrator:
             st.round_no = 0
             await self._reply_listener(
                 message.chat.id, "🧹 Память диалога очищена. Можешь дать новую идею."
+            )
+
+        @dp.message(Command("new", "newtopic"))
+        async def cmd_new(message: Message):
+            if not self._first_time(message):
+                return
+            st = self.state(message.chat.id)
+            self._cancel_task(st)
+            st.transcript.clear()
+            st.status = "idle"
+            st.round_no = 0
+            await self._reply_listener(
+                message.chat.id,
+                "🔄 Окей, забыли прошлое. Кидай новую тему/идею.",
             )
 
         @dp.message(Command("status"))
@@ -186,6 +206,18 @@ class Orchestrator:
             if is_boss
             else (message.from_user.full_name if message.from_user else "Гость")
         )
+
+        # Смена темы: если Босс заговорил про ДРУГОЕ — забываем старое обсуждение,
+        # чтобы боты не цеплялись за прошлую идею. (Только для Босса, не для go/ответов.)
+        is_go = self._is_go_command(text)
+        if is_boss and not is_go and len(st.transcript) >= 2:
+            if await self._is_new_topic(chat_id, text):
+                self._cancel_task(st)
+                st.transcript.clear()
+                st.round_no = 0
+                st.status = "idle"
+                log.info("Чат %s: Босс сменил тему — старый контекст сброшен", chat_id)
+
         st.transcript.append({"name": author, "text": text, "is_boss": is_boss})
         log.info("Вход от %s (boss=%s): %s", author, is_boss, text[:80])
 
@@ -194,7 +226,7 @@ class Orchestrator:
         # Команда Босса «погнали/делаем» → лидер берёт командование: раздаёт
         # задачи, команда обсуждает, спорное решает голосованием, затем выдаёт
         # подробный промпт + ТЗ. Перебивает обычный брейншторм, если он шёл.
-        if is_boss and self.cfg.voting and self._is_go_command(text):
+        if is_boss and self.cfg.voting and is_go:
             self._cancel_task(st)
             st.round_no = 0
             st.task = asyncio.create_task(self._run_directed_session(chat_id))
@@ -270,6 +302,29 @@ class Orchestrator:
             elif w in tokens:
                 return True
         return False
+
+    async def _is_new_topic(self, chat_id: int, text: str) -> bool:
+        """True, если Босс сменил тему. Сначала по ключевым словам, потом LLM."""
+        if not self.cfg.topic_switch_detect:
+            # хотя бы явные маркеры всё равно проверяем
+            t = text.lower()
+            return any(w in t for w in self.cfg.new_topic_words)
+        t = text.lower()
+        if any(w in t for w in self.cfg.new_topic_words):
+            return True
+        # Слишком короткие реплики (ок/да/нет/спасибо) — не новая тема.
+        if len(text.strip()) < 12:
+            return False
+        st = self.state(chat_id)
+        prev = st.transcript[:]  # новое сообщение ещё не добавлено
+        raw = await self.llm.chat(
+            model=self.cfg.moderator_model,
+            system=TOPIC_SHIFT_SYSTEM,
+            user=topic_shift_user_prompt(prev, text, self.cfg),
+            temperature=0.0,
+            max_tokens=60,
+        )
+        return parse_topic_shift(strip_think(raw or ""))
 
     async def _run_directed_session(self, chat_id: int) -> None:
         st = self.state(chat_id)
